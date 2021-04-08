@@ -2,6 +2,6 @@
   "Parameters": {
     "DBInstanceMasterPassword": "SED_REPLACE_DB_PASSWORD",
     "KeyName": "SED_REPLACE_KEYNAME",
-    "BucketName": "images-app-s3-bucket"
+    "BucketName": "images-app-s3-bucket-0"
   }
 }
