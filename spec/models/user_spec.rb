@@ -4,7 +4,7 @@ RSpec.describe User, type: :model do
   subject { User.new(email: 'mail.bk.az@gmail.com', password: 'testing123') }
 
   it 'should create a user' do
-    expect { subject.save }.to change(User, :count).by(0)
+    expect { subject.save }.to change(User, :count).by(1)
   end
 
   it 'should destroy the user' do
