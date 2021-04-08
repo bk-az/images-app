@@ -1,0 +1,534 @@
+AWSTemplateFormatVersion: 2010-09-09
+
+Description: "Provision production environment, creates VPC, EC2, RDS and CodeDeploy Application"
+
+Parameters:
+  KeyName: 
+    Description : Name of an existing EC2 KeyPair to enable SSH access to the instances
+    Type: AWS::EC2::KeyPair::KeyName
+    ConstraintDescription : must be the name of an existing EC2 KeyPair.
+  BucketName: 
+    Description : A unique name for the S3 Bucket.
+    Type: String
+  DBAllocatedStorage:
+    Default: '5'
+    Description: "The size of the database (Gb)"
+    Type: Number
+    MinValue: '5'
+    MaxValue: '1024'
+    ConstraintDescription: "Must be between 5 and 1024Gb."
+  DBInstanceClass:
+    Default: db.t2.micro
+    Description: "The database instance type"
+    Type: String
+    AllowedValues:
+      - db.t2.micro
+    ConstraintDescription: "Must select a valid database instance type."
+  DBInstanceMasterPassword:
+    NoEcho: true
+    Description: The database admin account password
+    Type: String
+  SSHLocation:
+    Description: The IP address range that can be used to SSH to the EC2 instances
+    Type: String
+    MinLength: 9
+    MaxLength: 18
+    Default: 0.0.0.0/0
+
+Mappings:
+  AWSRegion2AMI:
+    us-west-2:
+      AMI: ami-02701bcdc5509e57b
+
+
+Resources:
+  VPC:
+    Type: 'AWS::EC2::VPC'
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      EnableDnsHostnames: true
+      EnableDnsSupport: true
+      Tags:
+        - Key: Name
+          Value: images-app-vpc
+
+  InternetGateway:
+    Type: 'AWS::EC2::InternetGateway'
+    DependsOn: VPC
+  AttachGateway:
+    Type: 'AWS::EC2::VPCGatewayAttachment'
+    DependsOn:
+      - VPC
+      - InternetGateway
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref InternetGateway
+
+  PublicSubnet1:
+    Type: 'AWS::EC2::Subnet'
+    DependsOn: VPC
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.1.0/24
+      MapPublicIpOnLaunch: true
+      AvailabilityZone: !Select 
+        - '0'
+        - Fn::GetAZs: !Ref 'AWS::Region'
+      Tags:
+        - Key: Name
+          Value: images-app-public-subnet-1
+
+  PublicSubnet2:
+    Type: 'AWS::EC2::Subnet'
+    DependsOn: VPC
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.2.0/24
+      MapPublicIpOnLaunch: true
+      AvailabilityZone: !Select 
+        - '1'
+        - Fn::GetAZs: !Ref 'AWS::Region'
+      Tags:
+        - Key: Name
+          Value: images-app-public-subnet-2
+
+  PrivateSubnet1:
+    Type: 'AWS::EC2::Subnet'
+    DependsOn: VPC
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.3.0/24
+      AvailabilityZone: !Select 
+        - '0'
+        - Fn::GetAZs: !Ref 'AWS::Region'
+      Tags:
+        - Key: Name
+          Value: images-app-private-subnet-1
+
+  PrivateSubnet2:
+    Type: 'AWS::EC2::Subnet'
+    DependsOn: VPC
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.4.0/24
+      AvailabilityZone: !Select 
+        - '1'
+        - Fn::GetAZs: !Ref 'AWS::Region'
+      Tags:
+        - Key: Name
+          Value: images-app-private-subnet-2
+
+  PublicRouteTable:
+    Type: 'AWS::EC2::RouteTable'
+    DependsOn:
+      - VPC
+      - AttachGateway
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: images-app-public-route-table
+  PublicRoute:
+    Type: 'AWS::EC2::Route'
+    DependsOn:
+      - VPC
+      - PublicRouteTable
+      - InternetGateway
+      - AttachGateway
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  PublicSubnet1RouteTableAssociation:
+    Type: 'AWS::EC2::SubnetRouteTableAssociation'
+    DependsOn:
+      - PublicRouteTable
+      - PublicSubnet1
+    Properties:
+      SubnetId: !Ref PublicSubnet1
+      RouteTableId: !Ref PublicRouteTable
+
+  PublicSubnet2RouteTableAssociation:
+    Type: 'AWS::EC2::SubnetRouteTableAssociation'
+    DependsOn:
+      - PublicRouteTable
+      - PublicSubnet2
+    Properties:
+      SubnetId: !Ref PublicSubnet2
+      RouteTableId: !Ref PublicRouteTable
+
+  PrivateRouteTable:
+    Type: 'AWS::EC2::RouteTable'
+    DependsOn: VPC
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: images-app-private-route-table
+
+  PrivateSubnet1RouteTableAssociation:
+    Type: 'AWS::EC2::SubnetRouteTableAssociation'
+    DependsOn:
+      - PublicRouteTable
+      - PrivateSubnet1
+    Properties:
+      SubnetId: !Ref PrivateSubnet1
+      RouteTableId: !Ref PrivateRouteTable
+
+  PrivateSubnet2RouteTableAssociation:
+    Type: 'AWS::EC2::SubnetRouteTableAssociation'
+    DependsOn:
+      - PublicRouteTable
+      - PrivateSubnet2
+    Properties:
+      SubnetId: !Ref PrivateSubnet2
+      RouteTableId: !Ref PrivateRouteTable
+
+  WebSecurityGroup:
+    Type: 'AWS::EC2::SecurityGroup'
+    DependsOn: VPC
+    Properties:
+      GroupDescription: Enable HTTP access
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: images-app-security-group
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: '80'
+          ToPort: '80'
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: '22'
+          ToPort: '22'
+          CidrIp: !Ref SSHLocation
+
+  DBSecurityGroup:
+    Type: 'AWS::EC2::SecurityGroup'
+    DependsOn:
+      - VPC
+      - WebSecurityGroup
+    Properties:
+      GroupDescription: DB Instance Security Group
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: images-app-db-security-group
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: '3306'
+          ToPort: '3306'
+          SourceSecurityGroupId: !Ref WebSecurityGroup
+
+  DBSubnetGroup:
+    Type: 'AWS::RDS::DBSubnetGroup'
+    DependsOn:
+      - PrivateSubnet1
+      - PrivateSubnet2
+    Properties:
+      DBSubnetGroupDescription: DB Subnet Group
+      SubnetIds:
+        - !Ref PrivateSubnet1
+        - !Ref PrivateSubnet2
+
+  DBInstance:
+    Type: 'AWS::RDS::DBInstance'
+    Properties:
+      AllocatedStorage: !Ref DBAllocatedStorage
+      DBInstanceClass: !Ref DBInstanceClass
+      Engine: MySQL
+      MasterUsername: root
+      MasterUserPassword: !Ref DBInstanceMasterPassword
+      MultiAZ: 'false'
+      DBSubnetGroupName: !Ref DBSubnetGroup
+      VPCSecurityGroups:
+        - !Ref DBSecurityGroup
+      Tags:
+        - Key: Name
+          Value: images-app-db
+
+  CodeDeployRole: 
+    Type: "AWS::IAM::Role"
+    Properties: 
+      AssumeRolePolicyDocument: 
+        Version: "2012-10-17"
+        Statement: 
+          - 
+            Effect: "Allow"
+            Principal: 
+              Service: 
+                - "codedeploy.amazonaws.com"
+            Action: 
+              - "sts:AssumeRole"
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSCodeDeployRole
+      Path: "/"
+
+  Application:
+    Type: 'AWS::CodeDeploy::Application'
+    Properties:
+      ApplicationName: images-app-code-deploy
+
+  DeploymentConfig:
+    Type: 'AWS::CodeDeploy::DeploymentConfig'
+    Properties:
+      MinimumHealthyHosts:
+        Type: HOST_COUNT
+        Value: '0'
+
+  DeploymentGroup:
+    Type: 'AWS::CodeDeploy::DeploymentGroup'
+    Properties:
+      ApplicationName: !Ref Application
+      DeploymentConfigName: !Ref DeploymentConfig
+      DeploymentGroupName: images-app-deployment-group
+      Ec2TagFilters:
+        - Key: CodeDeployInstance
+          Value: images-app-server-cd
+          Type: KEY_AND_VALUE
+      ServiceRoleArn: !GetAtt CodeDeployRole.Arn
+
+  RootRole: 
+    Type: "AWS::IAM::Role"
+    Properties: 
+      AssumeRolePolicyDocument: 
+        Version: "2012-10-17"
+        Statement: 
+          - 
+            Effect: "Allow"
+            Principal: 
+              Service: 
+                - "ec2.amazonaws.com"
+            Action: 
+              - "sts:AssumeRole"
+      Path: "/"
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonS3FullAccess
+        - arn:aws:iam::aws:policy/service-role/AmazonEC2RoleforAWSCodeDeploy
+        - arn:aws:iam::aws:policy/AWSCloudFormationReadOnlyAccess
+        - arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy
+        - arn:aws:iam::aws:policy/service-role/AmazonEC2RoleforSSM
+        - arn:aws:iam::aws:policy/AmazonSSMReadOnlyAccess
+
+  RootInstanceProfile: 
+    Type: "AWS::IAM::InstanceProfile"
+    Properties: 
+      Path: "/"
+      Roles: 
+        - 
+          Ref: "RootRole"
+  WebServerInstance:
+    Type: "AWS::EC2::Instance"
+    Properties: 
+      IamInstanceProfile: !Ref RootInstanceProfile
+      ImageId: !FindInMap [ AWSRegion2AMI, !Ref "AWS::Region", AMI ]
+      InstanceType: t2.micro
+      KeyName: !Ref KeyName
+      NetworkInterfaces:
+        - DeviceIndex: '0'
+          AssociatePublicIpAddress: 'true'
+          SubnetId: !Ref PublicSubnet1
+          GroupSet:
+            - !Ref WebSecurityGroup
+      Tags:
+        - Key: Name
+          Value: "images-app"
+        - Key: CodeDeployInstance
+          Value: "images-app-server-cd"
+      UserData:
+        Fn::Base64:
+          !Sub |
+            #!/bin/bash -xe
+            apt-get update -y
+            apt-get install -y python-setuptools awscli
+            mkdir -p /opt/aws/bin
+            wget https://s3.amazonaws.com/cloudformation-examples/aws-cfn-bootstrap-latest.tar.gz
+            python -m easy_install --script-dir /opt/aws/bin aws-cfn-bootstrap-latest.tar.gz
+            aws configure set default.region ${AWS::Region}
+            /opt/aws/bin/cfn-init -v --stack ${AWS::StackName} --resource WebServerInstance --configsets full_install --region ${AWS::Region}
+            /opt/aws/bin/cfn-signal -e $? --stack ${AWS::StackName} --resource WebServerInstance --region ${AWS::Region}
+    CreationPolicy:
+      ResourceSignal:
+        Timeout: 'PT10M'
+    Metadata:
+      AWS::CloudFormation::Init: 
+        configSets: 
+          full_install:
+            - install_cfn
+            - add_app_user
+            - install_packages
+            - install_ruby_2_7_2
+            - install_passenger_nginx
+            - install_code_deploy_agent
+        install_cfn:
+          files:
+            "/etc/cfn/cfn-hup.conf":
+              content:
+                Fn::Join:
+                  - ''
+                  - - "[main]\n"
+                    - stack=
+                    - Ref: AWS::StackId
+                    - "\n"
+                    - region=
+                    - Ref: AWS::Region
+                    - "\n"
+              mode: '000400'
+              owner: root
+              group: root
+            "/etc/cfn/hooks.d/cfn-auto-reloader.conf":
+              content:
+                Fn::Join:
+                  - ''
+                  - - "[cfn-auto-reloader-hook]\n"
+                    - "triggers=post.update\n"
+                    - "path=Resources.WebServer.Metadata.AWS::CloudFormation::Init\n"
+                    - "action=/opt/aws/bin/cfn-init -v "
+                    - "         --stack "
+                    - Ref: AWS::StackName
+                    - "         --resource WebServer "
+                    - "         --configsets full_install "
+                    - "         --region "
+                    - Ref: AWS::Region
+                    - "\n"
+                    - "runas=root\n"
+              mode: '000400'
+              owner: root
+              group: root
+            "/lib/systemd/system/cfn-hup.service":
+              content:
+                Fn::Join:
+                  - ''
+                  - - "[Unit]\n"
+                    - "Description=cfn-hup daemon\n\n"
+                    - "[Service]\n"
+                    - "Type=simple\n"
+                    - "ExecStart=/opt/aws/bin/cfn-hup\n"
+                    - "Restart=always\n\n"
+                    - "[Install]\n"
+                    - WantedBy=multi-user.target
+              mode: '000400'
+              owner: root
+              group: root
+          commands:
+            01enable_cfn_hup:
+              command: systemctl enable cfn-hup.service
+            02start_cfn_hup:
+              command: systemctl start cfn-hup.service
+        add_app_user:
+          files:
+            "/tmp/add_app_user":
+              content:
+                Fn::Join:
+                - "\n"
+                - - "#!/bin/bash -xe"
+                  - "mkdir -p /var/www"
+                  - "useradd imagesapp -d /var/www/images-app -m"
+              mode: '000500'
+              owner: root
+              group: root
+          commands:
+            01_add_app_user:
+              command: "/tmp/add_app_user > /var/log/add_app_user.log"
+        install_packages:
+          files:
+            "/tmp/install_packages":
+              content:
+                Fn::Join:
+                - "\n"
+                - - "#!/bin/bash -xe"
+                  - "apt-get install -y mysql-client"
+                  - "apt-get install -y default-libmysqlclient-dev"
+                  - "curl -sL https://deb.nodesource.com/setup_12.x | sudo -E bash -"
+                  - "apt-get update"
+                  - "apt-get install -y nodejs"
+                  - "curl -sS https://dl.yarnpkg.com/debian/pubkey.gpg | sudo apt-key add -"
+                  - 'echo "deb https://dl.yarnpkg.com/debian/ stable main" | sudo tee /etc/apt/sources.list.d/yarn.list'
+                  - "apt-get update"
+                  - "apt-get install -y yarn"
+              mode: '000500'
+              owner: root
+              group: root
+          commands:
+            01_install_packages:
+              command: "/tmp/install_packages > /var/log/install_packages.log"
+        install_ruby_2_7_2:
+          files:
+            "/tmp/install_ruby":
+              content:
+                Fn::Join:
+                - "\n"
+                - - "#!/bin/bash -xe"
+                  - curl -sSL https://get.rvm.io | bash
+                  - source /etc/profile.d/rvm.sh
+                  - rvm install 2.7.2
+                  - rvm --default use 2.7.2
+                  - gem install bundler
+              mode: '000500'
+              owner: root
+              group: root
+          commands:
+            01_install_ruby:
+              command: "/tmp/install_ruby > /var/log/install_ruby.log"
+        install_passenger_nginx:
+          packages:
+            apt:
+              nginx: []
+              dirmngr: []
+              gnupg: []
+              apt-transport-https: []
+              ca-certificates: []
+          files:
+            "/tmp/install_passenger_nginx":
+              content:
+                Fn::Join:
+                - "\n"
+                - - "#!/bin/bash -xe"
+                  - "apt-key adv --keyserver hkp://keyserver.ubuntu.com:80 --recv-keys 561F9B9CAC40B2F7"
+                  - "sh -c 'echo deb https://oss-binaries.phusionpassenger.com/apt/passenger bionic main > /etc/apt/sources.list.d/passenger.list'"
+                  - "apt-get update"
+                  - "apt-get install -y libnginx-mod-http-passenger"
+                  - "if [ ! -f /etc/nginx/modules-enabled/50-mod-http-passenger.conf ]; then sudo ln -s /usr/share/nginx/modules-available/mod-http-passenger.load /etc/nginx/modules-enabled/50-mod-http-passenger.conf ; fi"
+              mode: '000500'
+              owner: root
+              group: root
+          commands:
+            01_install_passenger_nginx:
+              command: "/tmp/install_passenger_nginx > /var/log/install_passenger_nginx.log"
+          services: 
+            sysvinit: 
+              nginx: 
+                enabled: "true"
+                ensureRunning: "true"
+                files: 
+                  - "/etc/nginx/nginx.conf"
+                sources: 
+                  - "/var/www/html"
+        install_code_deploy_agent: 
+          commands: 
+            01_get_cd: 
+              command: "wget https://aws-codedeploy-us-west-2.s3.amazonaws.com/latest/install"
+              cwd: "/tmp"
+            02_install_cd: 
+              command: "chmod +x install && ./install auto"
+              cwd: "/tmp"
+
+  S3Bucket:
+    Type: 'AWS::S3::Bucket'
+    DeletionPolicy: Retain
+    Properties:
+      BucketName: !Ref BucketName
+
+Outputs:
+
+  RDSAddress:
+    Description: The hostname for the RDS instance
+    Value: !GetAtt DBInstance.Endpoint.Address
+
+  WebServerInstanceId:
+    Description: The images-app-server InstanceId Id
+    Value: !Ref WebServerInstance
+
+
+

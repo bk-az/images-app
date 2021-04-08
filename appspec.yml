@@ -1,0 +1,24 @@
+version: 0.0
+os: linux
+files:
+  - source: /
+    destination: /var/www/images-app
+hooks:
+  AfterInstall:
+    - location: config/aws/deploy/setup.sh
+      timeout: 300
+      runas: root
+    - location: config/aws/deploy/update_configs.sh
+      timeout: 300
+      runas: root
+    - location: config/aws/deploy/change_permissions.sh
+      timeout: 300
+      runas: root
+  ApplicationStart:
+    - location: config/aws/deploy/start_server.sh
+      timeout: 300
+      runas: root
+  ApplicationStop:
+    - location: config/aws/deploy/stop_server.sh
+      timeout: 300
+      runas: root

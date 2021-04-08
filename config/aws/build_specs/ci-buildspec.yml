@@ -1,0 +1,30 @@
+version: 0.2
+
+env:
+  variables:
+    RAILS_ENV: test
+
+phases:
+  install:
+    commands:
+      - echo bundle install started on `date`
+      - bundle install
+      - echo bundle install completed on `date`
+  pre_build:
+    commands:
+      - service mysql start
+  build:
+    commands:
+      - echo CI-Build started on `date`
+      - bin/rails db:create
+      - bin/rails db:migrate
+      - rspec spec/* --format RspecJunitFormatter --out rspec_results.xml
+  post_build:
+    commands:
+      - echo CI-Build completed on `date`
+
+reports:
+  rspec_reports:
+    files:
+      - rspec_results.xml
+    file-format: JUNITXML

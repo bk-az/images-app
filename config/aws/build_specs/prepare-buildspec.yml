@@ -1,0 +1,20 @@
+version: 0.2
+
+phases:
+  install:
+    commands:
+      - yum -y install aws-cli
+      
+  build:
+    commands:
+      - DATABASE_ROOT_PASSWORD=$(aws ssm get-parameter --name DATABASE-MASTER-PASSWORD --with-decryption --query 'Parameter.Value' --output text)
+      - WEB_SERVER_KEYNAME=$(aws ssm get-parameter --name IMAGES-APP-KEYNAME --with-decryption --query 'Parameter.Value' --output text)
+      - sed -i s/SED_REPLACE_DB_PASSWORD/$DATABASE_ROOT_PASSWORD/g config/aws/templates/provision-configuration.json
+      - sed -i s/SED_REPLACE_KEYNAME/$WEB_SERVER_KEYNAME/g config/aws/templates/provision-configuration.json
+  post_build:
+    commands:
+      - echo Build completed on `date`
+
+artifacts:
+  files:
+    - '**/*'
